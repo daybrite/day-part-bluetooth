@@ -1,0 +1,43 @@
+[package]
+name = "day-part-bluetooth"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+license = "MPL-2.0"
+repository = "https://github.com/daybrite/day-part-bluetooth"
+description = "Native bluetooth services for Day apps"
+include = ["/src/**", "/platform/**", "/examples/**", "/tests/**", "/build.rs", "/Cargo.toml", "/README.md", "/docs/**", "/LICENSE"]
+
+[package.metadata.day]
+compat = "0.*"
+
+[dependencies]
+day-bridge = "0.*"
+day-core = "0.*"
+day-part-permissions = "0.*"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[target.'cfg(target_os = "android")'.dependencies]
+day-platform-android = "0.*"
+
+[target.'cfg(all(target_os = "linux", not(target_env = "ohos")))'.dependencies]
+dbus = { version = "0.9.12", features = ["vendored"] }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62.2", features = ["Devices_Bluetooth_Advertisement", "Devices_Bluetooth_GenericAttributeProfile", "Devices_Radios", "Foundation", "Storage_Streams", "Win32_System_WinRT"] }
+windows-future = "0.3.2"
+
+[build-dependencies]
+day-build = "0.*"
+
+[workspace]
+
+[package.metadata.day.ios]
+frameworks = ["CoreBluetooth"]
+
+[package.metadata.day.macos]
+frameworks = ["CoreBluetooth"]
+
+[package.metadata.day.android]
+permissions = ["android.permission.BLUETOOTH_SCAN", "android.permission.BLUETOOTH_CONNECT", "android.permission.BLUETOOTH", "android.permission.BLUETOOTH_ADMIN", "android.permission.ACCESS_FINE_LOCATION", "android.permission.ACCESS_COARSE_LOCATION"]

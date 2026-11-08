@@ -1,0 +1,6 @@
+name: bluetooth
+flow:
+  - wait_for: { id: title }
+  - assert_visible: { id: adapter_state }
+  - assert_visible: { id: scan }
+  - screenshot: bluetooth

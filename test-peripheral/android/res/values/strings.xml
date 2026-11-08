@@ -1,0 +1,7 @@
+<resources>
+    <string name="app_name">Day BLE test fixture</string>
+    <string name="starting">Starting the software peripheral…</string>
+    <string name="advertising">Software peripheral active for three minutes. Keep this screen open. It serves only synthetic test data.</string>
+    <string name="finished">Software peripheral stopped. Reopen the app to run another test.</string>
+    <string name="unavailable">Bluetooth advertising is unavailable. Enable Bluetooth and Nearby devices access, then reopen the app.</string>
+</resources>

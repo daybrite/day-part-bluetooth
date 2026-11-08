@@ -1,0 +1,8 @@
+name: software-peripheral
+description: Requires the synthetic Mac peripheral and a physical BLE device.
+flow:
+  - wait_for: { id: fixture_run }
+  - scroll_to: { id: fixture_run }
+  - tap: { id: fixture_run }
+  - assert_text: { id: status, key: fixture_passed, timeout_secs: 45 }
+  - screenshot: bluetooth-fixture
