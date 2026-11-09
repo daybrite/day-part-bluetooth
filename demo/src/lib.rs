@@ -158,11 +158,11 @@ pub fn root() -> impl Piece {
                 ))
                 .spacing(3.0)
                 .align(HAlign::Leading)
-                .padding(Insets::symmetric(8.0, 16.0))
                 .grow(Dimension::Width)
             },
         )
-        .row_height(RowHeight::Uniform(68.0))
+        // Rows size to their three lines at the platform's own text size and row insets.
+        .row_height(RowHeight::Automatic)
         .on_select(move |id| selected.set(Some(id)))
         .selected_rows(move || {
             selected
