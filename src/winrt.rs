@@ -19,7 +19,7 @@ use windows::Devices::Bluetooth::Advertisement::{
 use windows::Devices::Bluetooth::GenericAttributeProfile::{
     GattCharacteristic, GattCharacteristicProperties,
     GattClientCharacteristicConfigurationDescriptorValue as Cccd, GattCommunicationStatus,
-    GattDeviceService, GattValueChangedEventArgs, GattWriteOption,
+    GattDeviceService, GattSession, GattValueChangedEventArgs, GattWriteOption,
 };
 use windows::Devices::Bluetooth::{
     BluetoothAdapter, BluetoothAddressType, BluetoothCacheMode, BluetoothConnectionStatus,
@@ -240,6 +240,9 @@ impl Winrt {
             return Ok(Value::Null);
         }
         self.tick()?;
+        if op == "access" {
+            return Ok(json!(self.state));
+        }
         if self.state != AdapterState::PoweredOn {
             return Err(error(ErrorKind::PoweredOff, "Bluetooth is powered off"));
         }
@@ -306,6 +309,21 @@ impl Winrt {
             .ok_or_else(|| error(ErrorKind::Disconnected, "connect the device first"))?;
         if op == "services" {
             return Ok(json!(peripheral.description));
+        }
+        if op == "max_write" {
+            let session = wait(
+                GattSession::FromDeviceIdAsync(
+                    &peripheral
+                        .device
+                        .BluetoothDeviceId()
+                        .map_err(native_error)?,
+                )
+                .map_err(native_error)?,
+                cancelled,
+                deadline,
+            )?;
+            let mtu = session.MaxPduSize().map_err(native_error)? as usize;
+            return Ok(json!(mtu.saturating_sub(3)));
         }
         let key = (
             canonical_uuid(field(request, "service")?),

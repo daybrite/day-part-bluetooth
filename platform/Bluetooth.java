@@ -1,3 +1,6 @@
+// Copyright © The Daybrite Project
+// SPDX-License-Identifier: MPL-2.0
+
 import android.bluetooth.*;
 import android.bluetooth.le.*;
 import android.content.*;
@@ -11,6 +14,9 @@ private static final Set<Long> observers = new HashSet<>();
 private static final Map<String, BluetoothGatt> connections = new HashMap<>();
 private static final Map<String, BluetoothDevice> devices = new HashMap<>();
 private static final Set<String> seen = new HashSet<>();
+/** The default ATT MTU before negotiation; a write may carry MTU - 3 bytes. */
+private static final int DEFAULT_MTU = 23;
+private static final int REQUESTED_MTU = 517;
 private static final class Request {
     final JSONObject body;
     final long token;
@@ -24,6 +30,7 @@ private static final class Request {
 private static final Map<String, Request> active = new HashMap<>();
 private static final Map<String, ArrayDeque<Request>> queues = new HashMap<>();
 private static final Set<String> connected = new HashSet<>();
+private static final Map<String, Integer> mtus = new HashMap<>();
 private static boolean duplicates;
 private static boolean scanning;
 private static boolean receiverInstalled;
@@ -44,6 +51,10 @@ private static UUID uuid(String value) {
     if (value.length() == 4) value = "0000" + value;
     if (value.length() == 8) value += "-0000-1000-8000-00805f9b34fb";
     return UUID.fromString(value);
+}
+private static int maxWrite(String id) {
+    Integer mtu = mtus.get(id);
+    return (mtu == null ? DEFAULT_MTU : mtu) - 3;
 }
 private static void emit(JSONObject event) {
     for (long observer : new ArrayList<>(observers)) watch_native_emit(observer, event.toString());
@@ -87,6 +98,12 @@ private static void finish(String id, Object value, int status) {
 private static boolean current(BluetoothGatt gatt) {
     return connections.get(gatt.getDevice().getAddress()) == gatt;
 }
+private static void closeConnection(String id, String reason) {
+    BluetoothGatt gatt = connections.remove(id);
+    connected.remove(id); mtus.remove(id);
+    drain(id, "disconnected", reason);
+    if (gatt != null) { gatt.disconnect(); gatt.close(); emit(object("event", "disconnected", "device", id)); }
+}
 private static boolean scanNeedsLocation() {
     if (Build.VERSION.SDK_INT < 31) return true;
     try {
@@ -123,9 +140,7 @@ private static void prepare() {
                     emit(object("event", "state", "state", state()));
                     if (!"powered_on".equals(state())) {
                         scanning = false;
-                        for (BluetoothGatt gatt : new ArrayList<>(connections.values())) gatt.close();
-                        for (String id : connections.keySet()) emit(object("event", "disconnected", "device", id));
-                        connections.clear(); connected.clear();
+                        for (String id : new ArrayList<>(connections.keySet())) closeConnection(id, "Bluetooth became unavailable");
                         Set<String> affected = new HashSet<>(active.keySet());
                         affected.addAll(queues.keySet());
                         for (String id : affected) drain(id, "disconnected", "Bluetooth became unavailable");
@@ -133,7 +148,8 @@ private static void prepare() {
                 });
             }
         };
-        if (Build.VERSION.SDK_INT >= 33) context.getApplicationContext().registerReceiver(receiver, new IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED), Context.RECEIVER_EXPORTED);
+        // A protected system broadcast: no other app can send it, so the receiver stays private.
+        if (Build.VERSION.SDK_INT >= 33) context.getApplicationContext().registerReceiver(receiver, new IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED), Context.RECEIVER_NOT_EXPORTED);
         else context.getApplicationContext().registerReceiver(receiver, new IntentFilter(BluetoothAdapter.ACTION_STATE_CHANGED));
         receiverInstalled = true;
     }
@@ -162,6 +178,10 @@ private static void discovered(ScanResult result) {
         }
     }
     String name = record == null ? null : record.getDeviceName();
+    if (name == null) {
+        // The cached GAP name, as CoreBluetooth's `peripheral.name` fallback does.
+        try { name = result.getDevice().getName(); } catch (SecurityException ignored) {}
+    }
     emit(object("event", "advertisement", "advertisement", object("device", id, "name", name == null ? JSONObject.NULL : name,
         "rssi", result.getRssi(), "services", services, "manufacturer_data", manufacturer,
         "connectable", Build.VERSION.SDK_INT >= 26 ? result.isConnectable() : JSONObject.NULL)));
@@ -176,11 +196,7 @@ public static void cancel_native(long token) {
         Request request = null;
         for (Request value : active.values()) if (value.token == token) { request = value; break; }
         if (request != null) {
-            String id = request.device;
-            BluetoothGatt gatt = connections.remove(id); connected.remove(id);
-            drain(id, "disconnected", "An active GATT operation was cancelled; reconnect before continuing");
-            if (gatt != null) { gatt.disconnect(); gatt.close(); }
-            emit(object("event", "disconnected", "device", id));
+            closeConnection(request.device, "An active GATT operation was cancelled; reconnect before continuing");
         } else {
             for (ArrayDeque<Request> queue : queues.values()) queue.removeIf(value -> value.token == token);
             queues.values().removeIf(ArrayDeque::isEmpty);
@@ -211,6 +227,7 @@ private static void command(JSONObject request, long token) throws Exception {
     String op = request.getString("op"), id = request.optString("device");
     if (op.equals("api_level")) { reply(token, Build.VERSION.SDK_INT); return; }
     if (op.equals("scan_needs_location")) { reply(token, scanNeedsLocation()); return; }
+    if (op.equals("access")) { reply(token, state()); return; }
     if (!permitted()) { fail(token, "permission_denied", "Grant Bluetooth permissions before use"); return; }
     if (adapter == null) { fail(token, "unsupported", "No Bluetooth adapter"); return; }
     if (!adapter.isEnabled()) { fail(token, "powered_off", "Bluetooth is off"); return; }
@@ -226,17 +243,16 @@ private static void command(JSONObject request, long token) throws Exception {
     if (op.equals("stop_scan")) { adapter.getBluetoothLeScanner().stopScan(scanner); scanning = false; reply(token, null); return; }
     BluetoothGatt gatt = connections.get(id);
     if (op.equals("disconnect")) {
-        connections.remove(id); connected.remove(id);
-        drain(id, "disconnected", "Peripheral disconnected by app");
-        if (gatt != null) { gatt.disconnect(); gatt.close(); emit(object("event", "disconnected", "device", id)); }
+        closeConnection(id, "Peripheral disconnected by app");
         reply(token, null); return;
     }
+    if (op.equals("max_write")) { reply(token, maxWrite(id)); return; }
     if (!op.equals("connect") && (gatt == null || !connected.contains(id))) { fail(token, "disconnected", "Peripheral is disconnected"); return; }
     String pendingCharacteristic = request.optString("characteristic");
     main.postDelayed(() -> {
         Request running = active.get(id);
         if (running == null || running.token != token) return;
-        connected.remove(id);
+        connected.remove(id); mtus.remove(id);
         drain(id, "timeout", "Bluetooth operation timed out; connection closed");
         BluetoothGatt expired = connections.remove(id);
         if (expired != null) { expired.disconnect(); expired.close(); }
@@ -263,13 +279,19 @@ private static void command(JSONObject request, long token) throws Exception {
     else if (op.equals("write")) {
         JSONArray array = request.getJSONArray("value"); byte[] value = new byte[array.length()];
         for (int i = 0; i < value.length; i++) value[i] = (byte)array.getInt(i);
-        int type = request.optBoolean("with_response", true) ? BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT : BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE;
+        boolean withResponse = request.optBoolean("with_response", true);
+        int property = withResponse ? BluetoothGattCharacteristic.PROPERTY_WRITE : BluetoothGattCharacteristic.PROPERTY_WRITE_NO_RESPONSE;
+        if ((characteristic.getProperties() & property) == 0) { fail(token, "unsupported", "Characteristic does not support this write type"); return; }
+        int limit = maxWrite(id);
+        if (value.length > limit) { fail(token, "invalid_argument", "Write exceeds the maximum write length of " + limit + " bytes"); return; }
+        int type = withResponse ? BluetoothGattCharacteristic.WRITE_TYPE_DEFAULT : BluetoothGattCharacteristic.WRITE_TYPE_NO_RESPONSE;
         if (Build.VERSION.SDK_INT >= 33) accepted = gatt.writeCharacteristic(characteristic, value, type) == BluetoothStatusCodes.SUCCESS;
         else { characteristic.setWriteType(type); characteristic.setValue(value); accepted = gatt.writeCharacteristic(characteristic); }
     } else if (op.equals("notify")) {
         boolean enabled = request.getBoolean("enabled");
         BluetoothGattDescriptor descriptor = characteristic.getDescriptor(uuid("2902"));
-        if (descriptor != null && gatt.setCharacteristicNotification(characteristic, enabled)) {
+        if (descriptor == null) { fail(token, "unsupported", "Characteristic has no client configuration descriptor"); return; }
+        if (gatt.setCharacteristicNotification(characteristic, enabled)) {
             byte[] value = !enabled ? BluetoothGattDescriptor.DISABLE_NOTIFICATION_VALUE :
                 (characteristic.getProperties() & BluetoothGattCharacteristic.PROPERTY_NOTIFY) != 0 ? BluetoothGattDescriptor.ENABLE_NOTIFICATION_VALUE : BluetoothGattDescriptor.ENABLE_INDICATION_VALUE;
             if (Build.VERSION.SDK_INT >= 33) accepted = gatt.writeDescriptor(descriptor, value) == BluetoothStatusCodes.SUCCESS;
@@ -287,9 +309,14 @@ private static boolean matches(BluetoothGatt gatt, String op, BluetoothGattChara
 }
 private static void value(BluetoothGatt gatt, BluetoothGattCharacteristic characteristic, byte[] bytes, int status, boolean read) {
     if (!current(gatt)) return;
-    if (read && matches(gatt, "read", characteristic)) finish(gatt.getDevice().getAddress(), bytes(bytes), status);
+    // The answer to a read belongs to that request; only unsolicited updates are events.
+    if (read) { if (matches(gatt, "read", characteristic)) finish(gatt.getDevice().getAddress(), bytes(bytes), status); return; }
     if (status == 0) emit(object("event", "value", "device", gatt.getDevice().getAddress(),
         "service", characteristic.getService().getUuid().toString(), "characteristic", characteristic.getUuid().toString(), "value", bytes(bytes)));
+}
+private static void linkReady(BluetoothGatt gatt) {
+    String id = gatt.getDevice().getAddress();
+    if (matches(gatt, "connect", null)) finish(id, null, 0);
 }
 private static final BluetoothGattCallback callback = new BluetoothGattCallback() {
     public void onConnectionStateChange(BluetoothGatt gatt, int status, int state) {
@@ -297,14 +324,28 @@ private static final BluetoothGattCallback callback = new BluetoothGattCallback(
             if (!current(gatt)) return;
             String id = gatt.getDevice().getAddress();
             if (state == BluetoothProfile.STATE_CONNECTED && status == 0) {
-                connected.add(id);
+                connected.add(id); mtus.remove(id);
                 emit(object("event", "connected", "device", id));
-                if (matches(gatt, "connect", null)) finish(id, null, 0);
+                // Negotiate the largest MTU before the connect call resolves, so the write
+                // limit is known; Android 14 requests 517 itself and still reports it here.
+                boolean negotiating = false;
+                try { negotiating = gatt.requestMtu(REQUESTED_MTU); } catch (SecurityException ignored) {}
+                if (!negotiating) { linkReady(gatt); return; }
+                main.postDelayed(() -> { if (current(gatt) && !mtus.containsKey(id)) { mtus.put(id, DEFAULT_MTU); linkReady(gatt); } }, 3000);
             } else if (state == BluetoothProfile.STATE_DISCONNECTED || status != 0) {
-                connections.remove(id, gatt); connected.remove(id); gatt.close();
+                connections.remove(id, gatt); connected.remove(id); mtus.remove(id); gatt.close();
                 emit(object("event", "disconnected", "device", id));
                 drain(id, "disconnected", "GATT disconnect status " + status);
             }
+        });
+    }
+    public void onMtuChanged(BluetoothGatt gatt, int mtu, int status) {
+        main.post(() -> {
+            if (!current(gatt)) return;
+            String id = gatt.getDevice().getAddress();
+            if (mtus.containsKey(id)) return;
+            mtus.put(id, status == 0 ? mtu : DEFAULT_MTU);
+            linkReady(gatt);
         });
     }
     public void onServicesDiscovered(BluetoothGatt gatt, int status) {

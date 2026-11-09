@@ -22,6 +22,8 @@ async fn scan() -> Result<ble::Watch, ble::Error> {
 }
 ```
 
+Call `request_access()` from a user action before the first scan or connection. It asks for Android's Nearby devices permissions, shows the Apple prompt, and resolves once the adapter reports its state: `Ok` means powered on, a refusal is `PermissionDenied`, and a radio that is off is `PoweredOff`. Creating a watch alone shows no prompt; on Apple platforms its first state event is `Unknown` until access is requested, and operations issued before the state is known wait for it instead of failing.
+
 Keep `Watch` while listening. Call `stop_scan()` when discovery is finished; dropping the watcher removes its subscription but does not stop the shared adapter scan. Service filters and duplicate-advertisement reporting are available through `ScanOptions`.
 
 Device identifiers are opaque and platform-specific. Apple supplies UUIDs, Android supplies addresses that may rotate, and Linux supplies BlueZ object paths. An advertisement is not proof of a peripheral's identity. Connect only after the user chooses an appropriate device.
@@ -39,6 +41,10 @@ flowchart LR
     H --> I
 ```
 
+## UUIDs
+
+Every UUID the package accepts or returns is canonical: lowercase, 128-bit, hyphenated. Pass `180F`, `0000180f`, or a full UUID in either case; compare results against `canonical_uuid("180F")?`. The platforms spell UUIDs differently, and the package absorbs the difference so an app's comparisons work everywhere. Simulations see the spelling the app passed.
+
 ## Read, write, and subscribe
 
 After `connect(device).await`, call `services(device).await` to discover services and characteristic properties. Use the returned UUIDs with:
@@ -47,15 +53,19 @@ After `connect(device).await`, call `services(device).await` to discover service
 # async fn example(device: &str, service: &str, characteristic: &str) -> Result<(), day_part_bluetooth::Error> {
 use day_part_bluetooth as ble;
 let value = ble::read(device, service, characteristic).await?;
+let limit = ble::max_write_length(device, true).await?;
+assert!(value.len() <= limit);
 ble::write(device, service, characteristic, &value, true).await?;
 ble::set_notify(device, service, characteristic, true).await?;
-// Event::Value carries subsequent values. Disable notifications when finished.
+// Event::Value carries subsequent notifications. Disable them when finished.
 ble::set_notify(device, service, characteristic, false).await?;
 ble::disconnect(device).await?;
 # Ok(()) }
 ```
 
-The final argument to `write` chooses whether the peripheral acknowledges the write. Check its characteristic properties before choosing. The package does not fragment arbitrary large application messages or provide a device-specific protocol.
+The final argument to `write` chooses whether the peripheral acknowledges the write. Check the characteristic's properties before choosing. `max_write_length` reports the largest payload the connection carries for each write type; Android negotiates the largest MTU during `connect`, and longer payloads fail with `InvalidArgument` on every platform. The package does not fragment arbitrary large application messages or provide a device-specific protocol.
+
+`Event::Value` carries notifications and indications. The answer to a `read` is returned by that call and does not arrive as an event.
 
 Apple and Android serialize GATT operations per peripheral, with bounded queues; other peripherals can proceed independently. Linux and Windows serialize requests on a worker with a limit of 128 outstanding requests. Disconnects, adapter shutdown, and timeouts fail affected requests. Dropping a future cancels a queued operation; cancelling an active GATT operation closes this client's connection. On Linux cleanup waits for the current D-Bus call to return or time out (up to 45 seconds for a connection). Windows operations have a 30-second deadline, but the OS may continue a connection attempt after the client cancels. A write may already have reached the device. Reconnect before continuing.
 
@@ -113,7 +123,7 @@ Windows needs a Bluetooth LE adapter and OS permission. Packaged apps must decla
 
 ## Demo and software peripheral
 
-Bluetooth Lab scans and inspects devices selected by the user. Its separate software-peripheral test exercises discovery, reads, writes, notifications, and disconnects using synthetic data.
+Bluetooth Lab scans, lists nearby devices, and inspects the one the user selects. Its separate software-peripheral test exercises discovery, reads, writes, notifications, and disconnects using synthetic data.
 
 On a Mac:
 
@@ -125,7 +135,7 @@ On a separate physical Android device:
 
 ```sh
 cd demo
-day launch -t android-material --android-device DEVICE_SERIAL
+day launch -t android-material --android-device DEVICE_SERIAL --script dayscript/fixture.yaml
 ```
 
 Allow Bluetooth access, then choose **Test software peripheral**. The helper advertises `DayBLEFixture` for ten minutes. Its service and characteristic UUIDs are private test identifiers; do not use it for real device data. The test writes only to that fixture service. Simulators generally cannot substitute for physical BLE radios.
@@ -150,4 +160,4 @@ cd demo
 day launch -t macos-appkit --script dayscript/demo.yaml
 ```
 
-The portable walkthrough checks the UI. The software-peripheral test checks native GATT traffic. Native queue and cancellation behavior follows the per-device operation model used in [btleplug](https://github.com/deviceplug/btleplug), adapted to Day's bridge and futures.
+The portable walkthrough checks the UI. The software-peripheral test checks native GATT traffic.

@@ -195,6 +195,25 @@ impl Session {
             None => crate::native_set_notify(device, service, characteristic, enabled).await,
         }
     }
+    pub async fn max_write_length(
+        &self,
+        device: &str,
+        with_response: bool,
+    ) -> Result<usize, Error> {
+        match self.simulation() {
+            Some(s) => match s
+                .dispatch(Request::MaxWriteLength {
+                    device: device.into(),
+                    with_response,
+                })
+                .await?
+            {
+                Reply::Length(length) => Ok(length),
+                _ => Err(wrong_reply()),
+            },
+            None => crate::native_max_write_length(device, with_response).await,
+        }
+    }
 }
 /// Restores the previous routing selection on drop; never cancels an already selected request
 /// or watch. Keep the guard for the whole test/app session, not just for fixture construction.

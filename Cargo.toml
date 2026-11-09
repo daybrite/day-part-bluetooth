@@ -5,20 +5,21 @@ edition = "2024"
 rust-version = "1.89"
 license = "MPL-2.0"
 repository = "https://github.com/daybrite/day-part-bluetooth"
-description = "Native bluetooth services for Day apps"
-include = ["/src/**", "/platform/**", "/examples/**", "/tests/**", "/build.rs", "/Cargo.toml", "/README.md", "/docs/**", "/LICENSE"]
+description = "Bluetooth LE central operations for Day apps"
+include = ["/src/**", "/platform/**", "/examples/**", "/tests/**", "/build.rs", "/Cargo.toml", "/README.md", "/CHANGELOG.md", "/docs/**", "/LICENSE"]
 
 [package.metadata.day]
 compat = "0.*"
 
 [dependencies]
 day-bridge = "0.*"
-day-core = "0.*"
-day-part-permissions = "0.*"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
+# The Java arm is reached through JNI and the Android permission prompt goes through
+# day-part-permissions; neither has a job on the other platforms.
 [target.'cfg(target_os = "android")'.dependencies]
+day-part-permissions = "0.*"
 day-platform-android = "0.*"
 
 [target.'cfg(all(target_os = "linux", not(target_env = "ohos")))'.dependencies]

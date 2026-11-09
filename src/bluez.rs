@@ -294,10 +294,13 @@ impl Bluez {
             return Ok(Value::Null);
         }
         self.refresh()?;
-        if !self
+        let powered = self
             .props(&self.adapter, ADAPTER)
-            .is_some_and(|p| boolean(p, "Powered"))
-        {
+            .is_some_and(|p| boolean(p, "Powered"));
+        if op == "access" {
+            return Ok(json!(if powered { "powered_on" } else { "powered_off" }));
+        }
+        if !powered {
             return Err(error(
                 ErrorKind::PoweredOff,
                 "Bluetooth adapter is powered off",
@@ -385,6 +388,22 @@ impl Bluez {
         }
         if op == "services" {
             return Ok(json!(self.services(device)));
+        }
+        if op == "max_write" {
+            // BlueZ 5.62+ reports the negotiated MTU on each characteristic; older daemons
+            // leave it out, and the ATT default then applies.
+            let mtu = self
+                .objects
+                .values()
+                .filter_map(|interfaces| {
+                    let props = interfaces.get(CHARACTERISTIC)?;
+                    let service = self.props(&text(props, "Service")?, SERVICE)?;
+                    (text(service, "Device")?.as_str() == device)
+                        .then(|| props.get("MTU").and_then(|v| v.0.as_u64()))?
+                })
+                .next()
+                .unwrap_or(23);
+            return Ok(json!(mtu.saturating_sub(3)));
         }
         let service = canonical_uuid(field(request, "service")?);
         let characteristic = canonical_uuid(field(request, "characteristic")?);

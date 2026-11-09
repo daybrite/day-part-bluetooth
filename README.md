@@ -13,15 +13,14 @@ application code with contrived replies and events, including disconnects and er
 
 ## Use
 
-This package is not yet published. From a sibling app checkout:
-
 ```toml
 [dependencies]
-day-part-bluetooth = { path = "../day-part-bluetooth" }
+day-part-bluetooth = "0.*"
 ```
 
-Build with the Day CLI so the app includes native bridge code and permissions. The first release
-requires Day's external bridge source support; see the [CI and release guide](docs/ci.md).
+Build with the Day CLI so the app includes native bridge code and permissions. Every UUID the
+API returns is canonical (lowercase, 128-bit), so comparisons work the same on every platform;
+see the [guide](docs/bluetooth.md#uuids).
 
 After scanning and selecting a device, read its battery characteristic:
 

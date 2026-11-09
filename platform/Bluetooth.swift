@@ -1,9 +1,14 @@
+// Copyright © The Daybrite Project
+// SPDX-License-Identifier: MPL-2.0
+
 import Foundation
 import CoreBluetooth
 
 private final class DayBluetoothCentral: NSObject, CBCentralManagerDelegate, CBPeripheralDelegate {
     static let shared = DayBluetoothCentral()
-    private var manager: CBCentralManager!
+    /// Created by the first command, never by a watch: creating it is what shows the system's
+    /// Bluetooth prompt, so it waits for the user's action.
+    private var manager: CBCentralManager?
     private var observers = Set<UInt64>()
     private var devices: [String: CBPeripheral] = [:]
     private struct Request {
@@ -19,14 +24,20 @@ private final class DayBluetoothCentral: NSObject, CBCentralManagerDelegate, CBP
     private var closing = Set<String>()
     private var remainingServices: [String: Set<ObjectIdentifier>] = [:]
     private var bufferedWrites: [String: (Data, CBCharacteristic)] = [:]
+    /// `access` requests waiting for the first known adapter state.
+    private var awaitingState: [UInt64] = []
+    /// Operations that arrived while the adapter state was still unknown or resetting.
+    private var deferred: [Request] = []
 
-    func prepare() {
-        if manager == nil { manager = CBCentralManager(delegate: self, queue: .main) }
+    private func prepare() -> CBCentralManager {
+        if let manager { return manager }
+        let created = CBCentralManager(delegate: self, queue: .main)
+        manager = created
+        return created
     }
     func observe(_ token: UInt64) {
         observers.insert(token)
-        prepare()
-        emit(["event": "state", "state": stateName(manager.state)])
+        emit(["event": "state", "state": manager.map { stateName($0.state) } ?? "unknown"])
     }
     func unobserve(_ token: UInt64) { observers.remove(token) }
     private func encode(_ value: Any) -> String {
@@ -65,6 +76,7 @@ private final class DayBluetoothCentral: NSObject, CBCentralManagerDelegate, CBP
         let queued = queues.removeValue(forKey: id) ?? []
         remainingServices.removeValue(forKey: id)
         bufferedWrites.removeValue(forKey: id)
+        deferred.removeAll { $0.device == id && $0.op != "scan" }
         if let current { fail(current.token, kind, message) }
         for request in queued { fail(request.token, kind, message) }
     }
@@ -74,13 +86,15 @@ private final class DayBluetoothCentral: NSObject, CBCentralManagerDelegate, CBP
             drain(id, "disconnected", "An active GATT operation was cancelled; reconnect before continuing")
             if let device = devices[id], device.state != .disconnected {
                 closing.insert(id)
-                manager.cancelPeripheralConnection(device)
+                manager?.cancelPeripheralConnection(device)
             }
         } else {
             for id in Array(queues.keys) {
                 queues[id]?.removeAll { $0.token == token }
                 if queues[id]?.isEmpty == true { queues.removeValue(forKey: id) }
             }
+            deferred.removeAll { $0.token == token }
+            awaitingState.removeAll { $0 == token }
         }
     }
     private func finish(_ id: String, _ value: Any = NSNull(), error: Error? = nil) {
@@ -99,12 +113,25 @@ private final class DayBluetoothCentral: NSObject, CBCentralManagerDelegate, CBP
         @unknown default: return "unknown"
         }
     }
+    private func errorKind(_ state: CBManagerState) -> String {
+        switch state {
+        case .unauthorized: return "permission_denied"
+        case .poweredOff: return "powered_off"
+        case .unsupported: return "unsupported"
+        default: return "busy"
+        }
+    }
     func command(_ text: String, _ token: UInt64) {
-        prepare()
+        let manager = prepare()
         guard let data = text.data(using: .utf8),
               let request = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
               let op = request["op"] as? String else {
             fail(token, "invalid_argument", "Malformed Bluetooth request"); return
+        }
+        if op == "access" {
+            if manager.state == .unknown { awaitingState.append(token) }
+            else { reply(token, stateName(manager.state)) }
+            return
         }
         let id = request["device"] as? String ?? ""
         let value = Request(token: token, body: request, op: op, device: id)
@@ -116,6 +143,7 @@ private final class DayBluetoothCentral: NSObject, CBCentralManagerDelegate, CBP
         } else { execute(value) }
     }
     private func execute(_ current: Request) {
+        let manager = prepare()
         let request = current.body, op = current.op, id = current.device, token = current.token
         if op == "stop_scan" { manager.stopScan(); reply(token); return }
         if op == "disconnect" {
@@ -126,11 +154,13 @@ private final class DayBluetoothCentral: NSObject, CBCentralManagerDelegate, CBP
             }
             reply(token); return
         }
+        // The state arrives asynchronously after the manager is created; hold the operation
+        // rather than failing a cold start, and replay it from centralManagerDidUpdateState.
+        if manager.state == .unknown || manager.state == .resetting {
+            deferred.append(current); return
+        }
         guard manager.state == .poweredOn else {
-            let kind = manager.state == .unauthorized ? "permission_denied" :
-                manager.state == .poweredOff ? "powered_off" :
-                manager.state == .unsupported ? "unsupported" : "busy"
-            fail(token, kind, "Bluetooth adapter is \(stateName(manager.state))"); return
+            fail(token, errorKind(manager.state), "Bluetooth adapter is \(stateName(manager.state))"); return
         }
         if op == "scan" {
             let services = (request["services"] as? [String] ?? []).map { CBUUID(string: $0) }
@@ -142,6 +172,10 @@ private final class DayBluetoothCentral: NSObject, CBCentralManagerDelegate, CBP
            let restored = manager.retrievePeripherals(withIdentifiers: [uuid]).first { devices[id] = restored }
         guard let device = devices[id] else { fail(token, "not_found", "Unknown peripheral"); return }
         device.delegate = self
+        if op == "max_write" {
+            let withResponse = request["with_response"] as? Bool ?? true
+            reply(token, device.maximumWriteValueLength(for: withResponse ? .withResponse : .withoutResponse)); return
+        }
         if op != "connect" && device.state != .connected {
             fail(token, "disconnected", "Peripheral is disconnected"); return
         }
@@ -150,7 +184,7 @@ private final class DayBluetoothCentral: NSObject, CBCentralManagerDelegate, CBP
             guard let self, self.pending[id]?.token == token else { return }
             self.closing.insert(id)
             self.drain(id, "timeout", "Bluetooth operation timed out; connection closed")
-            self.manager.cancelPeripheralConnection(device)
+            self.manager?.cancelPeripheralConnection(device)
         }
         if op == "connect" {
             if device.state == .connected { finish(id) }
@@ -172,8 +206,12 @@ private final class DayBluetoothCentral: NSObject, CBCentralManagerDelegate, CBP
             let type: CBCharacteristicWriteType = response ? .withResponse : .withoutResponse
             let bytes = request["value"] as? [UInt8] ?? []
             let property: CBCharacteristicProperties = response ? .write : .writeWithoutResponse
-            guard characteristic.properties.contains(property), bytes.count <= device.maximumWriteValueLength(for: type) else {
-                fail(token, "invalid_argument", "Write type or payload size is unsupported"); return
+            guard characteristic.properties.contains(property) else {
+                fail(token, "unsupported", "Characteristic does not support this write type"); return
+            }
+            let limit = device.maximumWriteValueLength(for: type)
+            guard bytes.count <= limit else {
+                fail(token, "invalid_argument", "Write exceeds the maximum write length of \(limit) bytes"); return
             }
             if !response && !device.canSendWriteWithoutResponse {
                 bufferedWrites[id] = (Data(bytes), characteristic)
@@ -191,15 +229,32 @@ private final class DayBluetoothCentral: NSObject, CBCentralManagerDelegate, CBP
         }
     }
     func centralManagerDidUpdateState(_ central: CBCentralManager) {
-        emit(["event": "state", "state": stateName(central.state)])
-        if central.state != .poweredOn {
-            for id in Set(pending.keys).union(queues.keys) { drain(id, "disconnected", "Bluetooth adapter became unavailable") }
-            for (id, device) in devices where device.state != .disconnected {
-                emit(["event": "disconnected", "device": id])
-            }
-            closing.removeAll()
-            devices.removeAll()
+        let name = stateName(central.state)
+        emit(["event": "state", "state": name])
+        if central.state != .unknown {
+            let waiting = awaitingState
+            awaitingState = []
+            for token in waiting { reply(token, name) }
         }
+        if central.state == .poweredOn {
+            let replay = deferred
+            deferred = []
+            for request in replay where request.op == "scan" || pending[request.device]?.token == request.token {
+                execute(request)
+            }
+            return
+        }
+        if central.state != .resetting {
+            let dropped = deferred
+            deferred = []
+            for request in dropped { fail(request.token, errorKind(central.state), "Bluetooth adapter is \(name)") }
+        }
+        for id in Set(pending.keys).union(queues.keys) { drain(id, "disconnected", "Bluetooth adapter became unavailable") }
+        for (id, device) in devices where device.state != .disconnected {
+            emit(["event": "disconnected", "device": id])
+        }
+        closing.removeAll()
+        devices.removeAll()
     }
     func centralManager(_ central: CBCentralManager, didDiscover peripheral: CBPeripheral, advertisementData: [String: Any], rssi RSSI: NSNumber) {
         let id = peripheral.identifier.uuidString
@@ -235,7 +290,7 @@ private final class DayBluetoothCentral: NSObject, CBCentralManagerDelegate, CBP
             // Other discovery callbacks may still be queued; close before another request can reuse them.
             closing.insert(id)
             drain(id, "platform", error.localizedDescription)
-            manager.cancelPeripheralConnection(peripheral)
+            manager?.cancelPeripheralConnection(peripheral)
             return
         }
         let services = peripheral.services ?? []
@@ -250,7 +305,7 @@ private final class DayBluetoothCentral: NSObject, CBCentralManagerDelegate, CBP
             // Other discovery callbacks may still be queued; close before another request can reuse them.
             closing.insert(id)
             drain(id, "platform", error.localizedDescription)
-            manager.cancelPeripheralConnection(peripheral)
+            manager?.cancelPeripheralConnection(peripheral)
             return
         }
         guard remainingServices[id]?.remove(ObjectIdentifier(service)) != nil else { return }
@@ -277,7 +332,7 @@ private final class DayBluetoothCentral: NSObject, CBCentralManagerDelegate, CBP
         // Old characteristic handles must not complete a request against the new service table.
         drain(id, "disconnected", "Peripheral services changed; reconnect and discover services again")
         closing.insert(id)
-        manager.cancelPeripheralConnection(peripheral)
+        manager?.cancelPeripheralConnection(peripheral)
     }
     private func matches(_ op: String, _ peripheral: CBPeripheral, _ characteristic: CBCharacteristic) -> Bool {
         let id = peripheral.identifier.uuidString
@@ -286,10 +341,12 @@ private final class DayBluetoothCentral: NSObject, CBCentralManagerDelegate, CBP
             CBUUID(string: current.characteristic) == characteristic.uuid
     }
     func peripheral(_ peripheral: CBPeripheral, didUpdateValueFor characteristic: CBCharacteristic, error: Error?) {
+        let id = peripheral.identifier.uuidString
         let value = Array(characteristic.value ?? Data())
-        if matches("read", peripheral, characteristic) { finish(peripheral.identifier.uuidString, value, error: error) }
-        if error == nil && peripheral.state == .connected && !closing.contains(peripheral.identifier.uuidString) {
-            emit(["event": "value", "device": peripheral.identifier.uuidString,
+        // The answer to a read belongs to that request; only unsolicited updates are events.
+        if matches("read", peripheral, characteristic) { finish(id, value, error: error); return }
+        if error == nil && peripheral.state == .connected && !closing.contains(id) {
+            emit(["event": "value", "device": id,
                   "service": characteristic.service?.uuid.uuidString ?? "", "characteristic": characteristic.uuid.uuidString, "value": value])
         }
     }

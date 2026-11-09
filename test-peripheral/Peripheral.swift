@@ -1,3 +1,6 @@
+// Copyright © The Daybrite Project
+// SPDX-License-Identifier: MPL-2.0
+
 // Synthetic GATT fixture. Run on a Mac; connect from a separate physical BLE device.
 import Foundation
 import CoreBluetooth

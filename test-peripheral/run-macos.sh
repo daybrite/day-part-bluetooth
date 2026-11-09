@@ -1,4 +1,6 @@
 #!/bin/bash
+# Copyright © The Daybrite Project
+# SPDX-License-Identifier: MPL-2.0
 set -euo pipefail
 fixture_dir="$(cd "$(dirname "$0")" && pwd)"
 fixture_build="$(mktemp -d "${TMPDIR:-/tmp}/day-ble-fixture.XXXXXX")"

@@ -43,12 +43,18 @@ pub enum Request {
         characteristic: String,
         enabled: bool,
     },
+    MaxWriteLength {
+        device: String,
+        with_response: bool,
+    },
 }
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Reply {
     Unit,
     Services(Vec<Service>),
     Value(Vec<u8>),
+    /// The answer to [`Request::MaxWriteLength`], in bytes.
+    Length(usize),
 }
 type Answer = Result<Reply, Error>;
 type ResponseFuture = Pin<Box<dyn Future<Output = Answer> + Send>>;

@@ -97,6 +97,7 @@ fn unchanged_global_api_exercises_a_complete_mock_peripheral() {
                     }
                 }
                 Request::SetNotify { enabled, .. } => fixture.lock().unwrap().1 = enabled,
+                Request::MaxWriteLength { .. } => return Ok(Reply::Length(20)),
                 Request::StopScan => {}
             }
             Ok(Reply::Unit)
@@ -117,6 +118,7 @@ fn unchanged_global_api_exercises_a_complete_mock_peripheral() {
             "2a19"
         );
         assert_eq!(ble::read("fixture", "180f", "2a19").await?, vec![42]);
+        assert_eq!(ble::max_write_length("fixture", true).await?, 20);
         ble::set_notify("fixture", "180f", "2a19", true).await?;
         ble::write("fixture", "180f", "2a19", &[77], true).await?;
         assert_eq!(ble::read("fixture", "180f", "2a19").await?, vec![77]);
@@ -131,7 +133,7 @@ fn unchanged_global_api_exercises_a_complete_mock_peripheral() {
             .iter()
             .any(|e| matches!(e,ble::Event::Value{value,..} if value==&vec![77]))
     );
-    assert_eq!(simulation.request_count(), 11);
+    assert_eq!(simulation.request_count(), 12);
     simulation.assert_finished().unwrap();
     // Removing the routing override leaves an existing watch attached to its original source.
     drop(guard);

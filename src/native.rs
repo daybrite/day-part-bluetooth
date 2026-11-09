@@ -1,3 +1,6 @@
+// Copyright © The Daybrite Project
+// SPDX-License-Identifier: MPL-2.0
+
 day_bridge::bridge! {
     #[day_bridge::declare]
     extern "day" {
