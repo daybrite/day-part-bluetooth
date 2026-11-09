@@ -1,37 +1,15 @@
-# The App Store and Google Play listing, also shown on the app's website:
+# Demo listing metadata. Replace the scaffold privacy URL before store submission.
 # https://daybrite.dev/docs/how-to/app-store-submissions#prepare-the-listing
-# `day store stage` writes what each store expects, and `day lint` checks the stores' limits.
-
-[storefront.submission-info]
-# contact-email = "support@example.com" # where a store reviewer writes back
-# review-notes = "How to exercise the app, for the store reviewer."
 
 [storefront.metadata]
-name = "Bluetooth Lab" # ≤30, the App Store name and Play title
-subtitle = "TODO: 30 characters, App Store"
-short = "TODO: one sentence, up to 80 characters, shown in Google Play search results."
-description = """
-TODO: what Bluetooth Lab does and who it is for. Lead with the sentence that would make someone
-install it; both stores show the first few lines before a "more" fold.
-"""
-keywords = ["todo", "comma", "separated"] # App Store only; ≤100 characters joined
-release-notes = """
-TODO: what changed in this version, up to 500 characters.
-"""
-privacy-url = "https://example.com/privacy" # the App Store requires one
-
-# The dayscript screenshots each listing shows, by `screenshot:` step name:
-# [storefront.ios-uikit.apple-app-store.screenshots]
-# iphone = ["welcome", "list", { name = "editor", theme = "dark" }]
-
-[storefront.metadata.fr]
 name = "Bluetooth Lab"
-subtitle = "TODO: 30 characters, App Store"
-short = "TODO: one sentence, up to 80 characters, shown in Google Play search results."
+subtitle = "Explore nearby BLE devices"
+short = "Scan Bluetooth LE devices and inspect their services with Day."
 description = """
-TODO: what Bluetooth Lab does and who it is for. Lead with the sentence that would make someone
-install it; both stores show the first few lines before a "more" fold.
+Bluetooth Lab demonstrates Bluetooth Low Energy support in Day apps. Scan for nearby
+peripherals, inspect their GATT services, and test reads, writes, and notifications against a
+software test peripheral. Native Bluetooth operations require compatible hardware and permission.
 """
-keywords = ["todo", "comma", "separated"]
-release-notes = "TODO: what changed in this version, up to 500 characters."
-privacy-url = "https://example.com/privacy"
+keywords = ["bluetooth", "BLE", "GATT", "sensors", "Day"]
+release-notes = "Initial Bluetooth discovery, service inspection, and software-peripheral demo."
+privacy-url = "https://example.com/privacy" # Scaffold URL; this demo is not ready for store submission.
