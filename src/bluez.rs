@@ -395,13 +395,12 @@ impl Bluez {
             let mtu = self
                 .objects
                 .values()
-                .filter_map(|interfaces| {
+                .find_map(|interfaces| {
                     let props = interfaces.get(CHARACTERISTIC)?;
                     let service = self.props(&text(props, "Service")?, SERVICE)?;
                     (text(service, "Device")?.as_str() == device)
                         .then(|| props.get("MTU").and_then(|v| v.0.as_u64()))?
                 })
-                .next()
                 .unwrap_or(23);
             return Ok(json!(mtu.saturating_sub(3)));
         }
@@ -595,7 +594,7 @@ fn manufacturer_data(props: &PropMap) -> Vec<u8> {
     };
     let Some(value) = entries
         .next()
-        .and_then(|v| v.as_iter())
+        .and_then(RefArg::as_iter)
         .and_then(|mut i| i.next())
     else {
         return Vec::new();
