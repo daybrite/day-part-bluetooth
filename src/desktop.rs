@@ -29,6 +29,10 @@ pub(crate) struct Shared {
     refresh_state: AtomicBool,
 }
 impl Shared {
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "callers build the event in place and hand it over"
+    )]
     pub(crate) fn emit(&self, event: Event) {
         let Ok(json) = serde_json::to_string(&event) else {
             return;
@@ -36,7 +40,7 @@ impl Shared {
         let watchers: Vec<_> = self
             .watchers
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .values()
             .cloned()
             .collect();
@@ -101,7 +105,9 @@ fn runtime() -> Result<&'static Runtime, day_bridge::Error> {
                                                 worker_shared
                                                     .pending
                                                     .lock()
-                                                    .unwrap_or_else(|e| e.into_inner())
+                                                    .unwrap_or_else(
+                                                        std::sync::PoisonError::into_inner,
+                                                    )
                                                     .remove(&token);
                                                 continue;
                                             }
@@ -119,7 +125,7 @@ fn runtime() -> Result<&'static Runtime, day_bridge::Error> {
                                 worker_shared
                                     .pending
                                     .lock()
-                                    .unwrap_or_else(|e| e.into_inner())
+                                    .unwrap_or_else(std::sync::PoisonError::into_inner)
                                     .remove(&token);
                                 done.complete(Ok(match result {
                                     Ok(result) => json!({"result":result}),
@@ -149,7 +155,7 @@ pub(crate) fn request(text: &str, done: Done<String>) -> Result<(), day_bridge::
         .shared
         .pending
         .lock()
-        .unwrap_or_else(|e| e.into_inner());
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     if pending.len() >= 128 {
         drop(pending);
         done.complete(Ok(
@@ -181,7 +187,7 @@ pub(crate) fn watch(emit: Emit<String>) -> Result<(), day_bridge::Error> {
         .shared
         .watchers
         .lock()
-        .unwrap_or_else(|e| e.into_inner())
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .insert(emit.token(), emit);
     runtime.shared.refresh_state.store(true, Ordering::Release);
     Ok(())
@@ -192,7 +198,7 @@ pub(crate) fn cancel(token: u64) {
             .shared
             .pending
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .get(&token)
     {
         flag.store(true, Ordering::Release);
@@ -204,7 +210,7 @@ pub(crate) fn unwatch(token: u64) {
             .shared
             .watchers
             .lock()
-            .unwrap_or_else(|e| e.into_inner())
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
             .remove(&token);
     }
 }

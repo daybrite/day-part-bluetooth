@@ -618,6 +618,10 @@ fn canonical_uuid(value: &str) -> String {
     }
     .to_lowercase()
 }
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "passed to `map_err`, which hands the error over by value"
+)]
 fn bus_error(e: dbus::Error) -> Error {
     let kind = match e.name().unwrap_or("") {
         "org.bluez.Error.NotAuthorized"

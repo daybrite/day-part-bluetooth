@@ -14,7 +14,9 @@ struct Settings {
     next_id: u64,
 }
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|e| e.into_inner())
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 /// Clones share routing settings; a new session defaults to native Bluetooth and does not
 /// inherit global interception. Native sessions share the platform adapter; simulated
@@ -36,6 +38,12 @@ impl Session {
     pub fn set_simulation(&self, simulation: Option<Simulation>) {
         lock(&self.0).simulation = simulation;
     }
+    /// Route this session's operations to `simulation` until the returned guard drops. The
+    /// newest live override wins.
+    ///
+    /// # Panics
+    ///
+    /// Panics if more than `u64::MAX` overrides have been installed on this session.
     pub fn install_simulation(&self, simulation: Simulation) -> SimulationGuard {
         let mut settings = lock(&self.0);
         settings.next_id = settings
@@ -60,41 +68,66 @@ impl Session {
     pub fn supported(&self) -> bool {
         self.simulation().is_some() || crate::native_supported()
     }
+    /// [`crate::watch`] on this session.
+    ///
+    /// # Errors
+    ///
+    /// Fails as [`crate::watch`] does.
     pub fn watch(&self, callback: impl FnMut(Event) + Send + 'static) -> Result<Watch, Error> {
         match self.simulation() {
             Some(simulation) => Ok(simulation.watch(callback)),
             None => crate::native_watch(callback),
         }
     }
+    /// [`crate::request_access`] on this session.
+    ///
+    /// # Errors
+    ///
+    /// Fails as [`crate::request_access`] does.
     pub async fn request_access(&self) -> Result<(), Error> {
         match self.simulation() {
-            Some(simulation) => unit(simulation.dispatch(Request::RequestAccess).await?),
+            Some(simulation) => unit(&simulation.dispatch(Request::RequestAccess).await?),
             None => crate::native_request_access().await,
         }
     }
+    /// [`crate::start_scan`] on this session.
+    ///
+    /// # Errors
+    ///
+    /// Fails as [`crate::start_scan`] does.
     pub async fn start_scan(&self, options: &ScanOptions) -> Result<(), Error> {
         for uuid in &options.services {
             crate::validate_uuid(uuid)?;
         }
         match self.simulation() {
             Some(simulation) => unit(
-                simulation
+                &simulation
                     .dispatch(Request::StartScan(options.clone()))
                     .await?,
             ),
             None => crate::native_start_scan(options).await,
         }
     }
+    /// [`crate::stop_scan`] on this session.
+    ///
+    /// # Errors
+    ///
+    /// Fails as [`crate::stop_scan`] does.
     pub async fn stop_scan(&self) -> Result<(), Error> {
         match self.simulation() {
-            Some(s) => unit(s.dispatch(Request::StopScan).await?),
+            Some(s) => unit(&s.dispatch(Request::StopScan).await?),
             None => crate::native_stop_scan().await,
         }
     }
+    /// [`crate::connect`] on this session.
+    ///
+    /// # Errors
+    ///
+    /// Fails as [`crate::connect`] does.
     pub async fn connect(&self, device: &str) -> Result<(), Error> {
         match self.simulation() {
             Some(s) => unit(
-                s.dispatch(Request::Connect {
+                &s.dispatch(Request::Connect {
                     device: device.into(),
                 })
                 .await?,
@@ -102,10 +135,15 @@ impl Session {
             None => crate::native_connect(device).await,
         }
     }
+    /// [`crate::disconnect`] on this session.
+    ///
+    /// # Errors
+    ///
+    /// Fails as [`crate::disconnect`] does.
     pub async fn disconnect(&self, device: &str) -> Result<(), Error> {
         match self.simulation() {
             Some(s) => unit(
-                s.dispatch(Request::Disconnect {
+                &s.dispatch(Request::Disconnect {
                     device: device.into(),
                 })
                 .await?,
@@ -113,6 +151,11 @@ impl Session {
             None => crate::native_disconnect(device).await,
         }
     }
+    /// [`crate::services`] on this session.
+    ///
+    /// # Errors
+    ///
+    /// Fails as [`crate::services`] does.
     pub async fn services(&self, device: &str) -> Result<Vec<Service>, Error> {
         match self.simulation() {
             Some(s) => match s
@@ -127,6 +170,11 @@ impl Session {
             None => crate::native_services(device).await,
         }
     }
+    /// [`crate::read`] on this session.
+    ///
+    /// # Errors
+    ///
+    /// Fails as [`crate::read`] does.
     pub async fn read(
         &self,
         device: &str,
@@ -149,6 +197,11 @@ impl Session {
             None => crate::native_read(device, service, characteristic).await,
         }
     }
+    /// [`crate::write`] on this session.
+    ///
+    /// # Errors
+    ///
+    /// Fails as [`crate::write`] does.
     pub async fn write(
         &self,
         device: &str,
@@ -160,7 +213,7 @@ impl Session {
         validate(service, characteristic)?;
         match self.simulation() {
             Some(s) => unit(
-                s.dispatch(Request::Write {
+                &s.dispatch(Request::Write {
                     device: device.into(),
                     service: service.into(),
                     characteristic: characteristic.into(),
@@ -174,6 +227,11 @@ impl Session {
             }
         }
     }
+    /// [`crate::set_notify`] on this session.
+    ///
+    /// # Errors
+    ///
+    /// Fails as [`crate::set_notify`] does.
     pub async fn set_notify(
         &self,
         device: &str,
@@ -184,7 +242,7 @@ impl Session {
         validate(service, characteristic)?;
         match self.simulation() {
             Some(s) => unit(
-                s.dispatch(Request::SetNotify {
+                &s.dispatch(Request::SetNotify {
                     device: device.into(),
                     service: service.into(),
                     characteristic: characteristic.into(),
@@ -195,6 +253,11 @@ impl Session {
             None => crate::native_set_notify(device, service, characteristic, enabled).await,
         }
     }
+    /// [`crate::max_write_length`] on this session.
+    ///
+    /// # Errors
+    ///
+    /// Fails as [`crate::max_write_length`] does.
     pub async fn max_write_length(
         &self,
         device: &str,
@@ -229,8 +292,8 @@ impl Drop for SimulationGuard {
         }
     }
 }
-fn unit(reply: Reply) -> Result<(), Error> {
-    if reply == Reply::Unit {
+fn unit(reply: &Reply) -> Result<(), Error> {
+    if *reply == Reply::Unit {
         Ok(())
     } else {
         Err(wrong_reply())

@@ -46,7 +46,7 @@ pub async fn roundtrip() -> Result<(), ble::Error> {
     .await?;
     let mut device = None;
     for _ in 0..100 {
-        device = found.lock().unwrap().clone();
+        device.clone_from(&found.lock().unwrap());
         if device.is_some() {
             break;
         }

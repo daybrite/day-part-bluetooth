@@ -162,6 +162,11 @@ fn native_supported() -> bool {
 /// the Bluetooth base UUID. Every string the native API returns is already in this form, so
 /// comparing against `canonical_uuid("180F")?` works on every platform. Simulations see the
 /// UUIDs an app passed, unchanged.
+///
+/// # Errors
+///
+/// Returns [`ErrorKind::InvalidArgument`] when `uuid` is not a 16-bit, 32-bit or 128-bit
+/// hexadecimal UUID.
 pub fn canonical_uuid(uuid: &str) -> Result<String, Error> {
     let lower = uuid.to_ascii_lowercase();
     let hex = |s: &str| s.bytes().all(|b| b.is_ascii_hexdigit());
@@ -262,36 +267,78 @@ pub fn supported() -> bool {
 /// means the adapter is powered on; a refused prompt is `PermissionDenied` and a radio that is
 /// off is `PoweredOff`. Uses the global session; in simulation this never requests OS
 /// permissions.
+///
+/// # Errors
+///
+/// Returns [`ErrorKind::PermissionDenied`] for a refused prompt, [`ErrorKind::PoweredOff`] when
+/// the radio is off, and [`ErrorKind::Unsupported`] where the platform has no Bluetooth LE.
 pub async fn request_access() -> Result<(), Error> {
     Session::global().request_access().await
 }
 /// Keep the returned watch alive. Its backend is fixed when the watch is created. Creating a
 /// watch shows no prompt; on Apple platforms its first state event is `Unknown` until
 /// [`request_access`] runs.
+///
+/// # Errors
+///
+/// Returns [`ErrorKind::Unsupported`] where the platform has no Bluetooth LE, and the
+/// platform's error when the watch cannot start.
 pub fn watch(callback: impl FnMut(Event) + Send + 'static) -> Result<Watch, Error> {
     Session::global().watch(callback)
 }
+/// Start scanning for advertisements, which arrive as [`Event::Advertisement`]. A new scan
+/// replaces the one in progress.
+///
+/// # Errors
+///
+/// Returns [`ErrorKind::InvalidArgument`] for a malformed service UUID, and the adapter's error
+/// otherwise, such as [`ErrorKind::PoweredOff`] or [`ErrorKind::PermissionDenied`].
 pub async fn start_scan(options: &ScanOptions) -> Result<(), Error> {
     Session::global().start_scan(options).await
 }
+/// Stop the scan in progress.
+///
+/// # Errors
+///
+/// Returns the adapter's error when the scan cannot be stopped.
 pub async fn stop_scan() -> Result<(), Error> {
     Session::global().stop_scan().await
 }
 /// Connect and wait for the link. Android also negotiates the largest MTU the peripheral allows
 /// before this resolves, so [`max_write_length`] is known afterwards.
+///
+/// # Errors
+///
+/// Returns the platform's error when the link cannot be established, such as
+/// [`ErrorKind::NotFound`], [`ErrorKind::Timeout`] or [`ErrorKind::PoweredOff`].
 pub async fn connect(device: &str) -> Result<(), Error> {
     Session::global().connect(device).await
 }
+/// Close the connection to a peripheral.
+///
+/// # Errors
+///
+/// Returns the platform's error when the request cannot be delivered.
 pub async fn disconnect(device: &str) -> Result<(), Error> {
     Session::global().disconnect(device).await
 }
 /// Discover every service and characteristic of a connected peripheral.
+///
+/// # Errors
+///
+/// Returns [`ErrorKind::Disconnected`] when the peripheral is not connected, and the
+/// platform's error when discovery fails.
 pub async fn services(device: &str) -> Result<Vec<Service>, Error> {
     Session::global().services(device).await
 }
 /// The largest payload [`write`] accepts for this connected peripheral, in bytes, for the given
 /// write type. Longer payloads fail with `InvalidArgument` on every platform; the package does
 /// not fragment messages.
+///
+/// # Errors
+///
+/// Returns [`ErrorKind::Disconnected`] when the peripheral is not connected, and the
+/// platform's error otherwise.
 pub async fn max_write_length(device: &str, with_response: bool) -> Result<usize, Error> {
     Session::global()
         .max_write_length(device, with_response)
@@ -299,6 +346,12 @@ pub async fn max_write_length(device: &str, with_response: bool) -> Result<usize
 }
 /// Read a characteristic's value. Dropping the future while the read is in flight closes the
 /// connection, so a late answer cannot complete a different request; reconnect before continuing.
+///
+/// # Errors
+///
+/// Returns [`ErrorKind::InvalidArgument`] for a malformed UUID, [`ErrorKind::NotFound`] for an
+/// unknown characteristic, [`ErrorKind::Disconnected`] when the link is down, and the
+/// platform's error when the read fails.
 pub async fn read(device: &str, service: &str, characteristic: &str) -> Result<Vec<u8>, Error> {
     Session::global()
         .read(device, service, characteristic)
@@ -308,6 +361,12 @@ pub async fn read(device: &str, service: &str, characteristic: &str) -> Result<V
 /// `write` property; without it the `write_without_response` property is required and the call
 /// resolves once the radio accepted the bytes. Payloads above [`max_write_length`] are rejected
 /// with `InvalidArgument`. Cancellation behaves as for [`read`].
+///
+/// # Errors
+///
+/// Returns [`ErrorKind::InvalidArgument`] for a malformed UUID or an oversized payload,
+/// [`ErrorKind::NotFound`] for an unknown characteristic, [`ErrorKind::Disconnected`] when the
+/// link is down, and the platform's error when the write fails.
 pub async fn write(
     device: &str,
     service: &str,
@@ -320,6 +379,12 @@ pub async fn write(
         .await
 }
 /// Subscribe to notifications or indications; later values arrive as [`Event::Value`].
+///
+/// # Errors
+///
+/// Returns [`ErrorKind::InvalidArgument`] for a malformed UUID, [`ErrorKind::NotFound`] for an
+/// unknown characteristic, [`ErrorKind::Unsupported`] when it can neither notify nor indicate,
+/// and the platform's error otherwise.
 pub async fn set_notify(
     device: &str,
     service: &str,
@@ -488,6 +553,10 @@ fn error(kind: ErrorKind, message: impl Into<String>) -> Error {
         message: message.into(),
     }
 }
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "passed to `map_err`, which hands the error over by value"
+)]
 fn bridge_error(e: day_bridge::Error) -> Error {
     let kind = if matches!(e, day_bridge::Error::Unsupported) {
         ErrorKind::Unsupported

@@ -99,7 +99,10 @@ pub(crate) struct Winrt {
 }
 impl Drop for Winrt {
     fn drop(&mut self) {
-        self.scan.lock().unwrap_or_else(|e| e.into_inner()).active = false;
+        self.scan
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .active = false;
         let _ = self.watcher.Stop();
         let _ = self.watcher.RemoveReceived(self.received);
         self.connections.clear();
@@ -148,7 +151,7 @@ impl Winrt {
                 if let Some(args) = args.as_ref() {
                     match advertisement(args, &received_scan) {
                         Ok(Some(advertisement)) => {
-                            events.emit(Event::Advertisement { advertisement })
+                            events.emit(Event::Advertisement { advertisement });
                         }
                         Err(error) => events.emit(Event::Error { error }),
                         _ => {}
@@ -192,7 +195,10 @@ impl Winrt {
             self.state = state;
             self.adapter_state();
             if self.state != AdapterState::PoweredOn {
-                self.scan.lock().unwrap_or_else(|e| e.into_inner()).active = false;
+                self.scan
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .active = false;
                 self.lost();
             }
         }
@@ -207,7 +213,10 @@ impl Winrt {
     }
     pub(crate) fn abort(&mut self, request: &Value) {
         if request["op"] == "scan" {
-            self.scan.lock().unwrap_or_else(|e| e.into_inner()).active = false;
+            self.scan
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .active = false;
             let _ = self.watcher.Stop();
         }
         if let Some(device) = request["device"].as_str() {
@@ -231,7 +240,10 @@ impl Winrt {
         let op = field(request, "op")?;
         let deadline = Instant::now() + Duration::from_secs(30);
         if op == "stop_scan" {
-            self.scan.lock().unwrap_or_else(|e| e.into_inner()).active = false;
+            self.scan
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .active = false;
             self.watcher.Stop().map_err(native_error)?;
             return Ok(Value::Null);
         }
@@ -248,10 +260,16 @@ impl Winrt {
         }
         if op == "scan" {
             // Ignore callbacks from the previous scan while replacing its filter.
-            self.scan.lock().unwrap_or_else(|e| e.into_inner()).active = false;
+            self.scan
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .active = false;
             self.watcher.Stop().map_err(native_error)?;
             {
-                let mut scan = self.scan.lock().unwrap_or_else(|e| e.into_inner());
+                let mut scan = self
+                    .scan
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
                 scan.filters = request["services"]
                     .as_array()
                     .into_iter()
@@ -265,7 +283,10 @@ impl Winrt {
                 scan.active = true;
             }
             if let Err(e) = self.watcher.Start() {
-                self.scan.lock().unwrap_or_else(|e| e.into_inner()).active = false;
+                self.scan
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .active = false;
                 return Err(native_error(e));
             }
             return Ok(Value::Null);
@@ -281,7 +302,7 @@ impl Winrt {
             let (address, address_type) = self
                 .scan
                 .lock()
-                .unwrap_or_else(|e| e.into_inner())
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
                 .addresses
                 .get(device)
                 .copied()
@@ -572,7 +593,9 @@ fn advertisement(
         .map(uuid)
         .collect();
     {
-        let mut scan = state.lock().unwrap_or_else(|e| e.into_inner());
+        let mut scan = state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         if !scan.active
             || (!scan.duplicates && scan.seen.contains(&device))
             || (!scan.filters.is_empty() && !services.iter().any(|s| scan.filters.contains(s)))
@@ -598,12 +621,16 @@ fn advertisement(
     Ok(Some(Advertisement {
         device,
         name: (!name.is_empty()).then_some(name),
-        rssi: args.RawSignalStrengthInDBm().map_err(native_error)? as i32,
+        rssi: i32::from(args.RawSignalStrengthInDBm().map_err(native_error)?),
         services,
         manufacturer_data,
         connectable: args.IsConnectable().ok(),
     }))
 }
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "owns the operation it drives to completion"
+)]
 fn wait<T: RuntimeType + 'static>(
     operation: IAsyncOperation<T>,
     cancelled: &AtomicBool,
@@ -648,8 +675,12 @@ fn check_status(status: GattCommunicationStatus) -> Result<(), Error> {
         )),
     }
 }
+#[expect(
+    clippy::needless_pass_by_value,
+    reason = "passed to `map_err`, which hands the error over by value"
+)]
 fn native_error(e: windows::core::Error) -> Error {
-    let kind = if e.code().0 as u32 == 0x80070005 {
+    let kind = if e.code().0 as u32 == 0x8007_0005 {
         ErrorKind::PermissionDenied
     } else {
         ErrorKind::Platform

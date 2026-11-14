@@ -80,7 +80,9 @@ struct Inner {
 }
 static STREAMS: day_bridge::Streams<Event> = day_bridge::Streams::new();
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
-    mutex.lock().unwrap_or_else(|e| e.into_inner())
+    mutex
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
 /// A notification/event source for handlers. A weak reference avoids cycles when a handler
@@ -90,6 +92,10 @@ pub struct Events(Weak<Inner>);
 impl Events {
     /// Delivers synchronously; callbacks may enqueue another event or stop their own watch.
     /// Concurrent/reentrant events are serialized per watcher by Day's stream registry.
+    #[expect(
+        clippy::needless_pass_by_value,
+        reason = "public API: handlers hand over the event they built"
+    )]
     pub fn emit(&self, event: Event) {
         let Some(inner) = self.0.upgrade() else {
             return;
@@ -159,6 +165,11 @@ impl Simulation {
     }
     /// Fails if scripted expectations remain or any request was unmatched/out of order.
     /// An explicitly scripted error response is not considered an unexpected request.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`ErrorKind::InvalidArgument`] with the counts of unconsumed expectations and
+    /// unexpected requests.
     pub fn assert_finished(&self) -> Result<(), Error> {
         let state = lock(&self.0.state);
         if state.expected.is_empty() && state.unexpected == 0 {

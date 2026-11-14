@@ -64,7 +64,9 @@ pub fn root() -> impl Piece {
     let watch = ble::watch(move |event| match event {
         ble::Event::State { state } => states.set(state),
         ble::Event::Advertisement { advertisement } => {
-            let mut map = cache.lock().unwrap_or_else(|e| e.into_inner());
+            let mut map = cache
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
             if map.len() < 256 || map.contains_key(&advertisement.device) {
                 map.insert(advertisement.device.clone(), advertisement);
                 values.set(map.values().cloned().collect());
