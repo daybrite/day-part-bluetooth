@@ -2,7 +2,7 @@
 name = "day-part-bluetooth"
 version = "0.2.0"
 edition = "2024"
-rust-version = "1.89"
+rust-version = "1.100"
 license = "MPL-2.0"
 repository = "https://github.com/daybrite/day-part-bluetooth"
 description = "Bluetooth LE central operations for Day apps"
